@@ -15,6 +15,9 @@ function App() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [selectedEdge, setSelectedEdge] = useState(null);
 
+  // Visual merge state - for collapsing/expanding node groups
+  const [mergedNodes, setMergedNodes] = useState(new Map()); // nodeId -> { hiddenNodes: [], displayedNode: nodeId }
+
   // Load data from localStorage on app start
   useEffect(() => {
     const savedData = loadFromLocalStorage();
@@ -194,6 +197,54 @@ function App() {
     URL.revokeObjectURL(relationsUrl);
   }, [persons, relations]);
 
+  // Visual merge functions
+  const visualMergeNode = useCallback((nodeId) => {
+    // Find all nodes connected to this node
+    const connectedNodeIds = new Set();
+    relations.forEach(relation => {
+      if (relation.from === nodeId) {
+        connectedNodeIds.add(relation.to);
+      }
+      if (relation.to === nodeId) {
+        connectedNodeIds.add(relation.from);
+      }
+    });
+
+    const connectedNodes = Array.from(connectedNodeIds);
+
+    setMergedNodes(prev => {
+      const newMap = new Map(prev);
+      newMap.set(nodeId, {
+        hiddenNodes: connectedNodes,
+        displayedNode: nodeId // Initially display the clicked node
+      });
+      return newMap;
+    });
+  }, [relations]);
+
+  const visualUnmergeNode = useCallback((nodeId) => {
+    setMergedNodes(prev => {
+      const newMap = new Map(prev);
+      newMap.delete(nodeId);
+      return newMap;
+    });
+  }, []);
+
+  const switchDisplayedNode = useCallback((mergedNodeId, newDisplayedNodeId) => {
+    setMergedNodes(prev => {
+      const newMap = new Map(prev);
+      const mergeInfo = newMap.get(mergedNodeId);
+      if (mergeInfo) {
+        newMap.set(mergedNodeId, {
+          ...mergeInfo,
+          displayedNode: newDisplayedNodeId
+        });
+      }
+      return newMap;
+    });
+  }, []);
+
+  // Original data merge function (keep for backwards compatibility)
   const mergePerson = useCallback((person1Id, person2Id, keepFirst = true) => {
     const person1 = persons.find(p => p.id === person1Id);
     const person2 = persons.find(p => p.id === person2Id);
@@ -323,6 +374,10 @@ function App() {
             onAddRelation={addRelation}
             onDeleteRelation={deleteRelation}
             onMergePerson={mergePerson}
+            mergedNodes={mergedNodes}
+            onVisualMergeNode={visualMergeNode}
+            onVisualUnmergeNode={visualUnmergeNode}
+            onSwitchDisplayedNode={switchDisplayedNode}
           />
         </div>
 

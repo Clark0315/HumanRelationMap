@@ -11,7 +11,11 @@ const GraphCanvas = ({
   onUpdatePerson,
   onDeletePerson,
   onAddRelation,
-  onDeleteRelation
+  onDeleteRelation,
+  mergedNodes,
+  onVisualMergeNode,
+  onVisualUnmergeNode,
+  onSwitchDisplayedNode
 }) => {
   const svgRef = useRef();
   const [contextMenu, setContextMenu] = useState({ show: false, x: 0, y: 0, target: null });
@@ -24,6 +28,38 @@ const GraphCanvas = ({
 
     const width = svg.node().clientWidth;
     const height = svg.node().clientHeight;
+
+    // Calculate visible nodes based on visual merge state
+    const hiddenNodeIds = new Set();
+    const visiblePersons = persons.filter(person => {
+      // Check if this person should be hidden due to visual merge
+      for (const [mergedNodeId, mergeInfo] of mergedNodes) {
+        if (mergeInfo.hiddenNodes.includes(person.id)) {
+          hiddenNodeIds.add(person.id);
+          return false; // Hide this node
+        }
+      }
+      return true; // Show this node
+    });
+
+    // Also include the displayed nodes from merged groups
+    const displayedFromMerged = [];
+    for (const [mergedNodeId, mergeInfo] of mergedNodes) {
+      const displayedPerson = persons.find(p => p.id === mergeInfo.displayedNode);
+      if (displayedPerson && !displayedFromMerged.find(p => p.id === displayedPerson.id)) {
+        displayedFromMerged.push(displayedPerson);
+      }
+    }
+
+    // Combine visible persons with displayed merged nodes
+    const finalVisiblePersons = [...visiblePersons, ...displayedFromMerged]
+      .filter((person, index, self) => index === self.findIndex(p => p.id === person.id));
+
+    // Filter relations to only show those between visible nodes
+    const visibleNodeIds = new Set(finalVisiblePersons.map(p => p.id));
+    const visibleRelations = relations.filter(relation =>
+      visibleNodeIds.has(relation.from) && visibleNodeIds.has(relation.to)
+    );
 
     // Set up zoom behavior
     const zoom = d3.zoom()
@@ -59,8 +95,8 @@ const GraphCanvas = ({
 
     // Helper function to calculate curved path for bidirectional relationships
     const calculateCurvedPath = (d, offset = 0) => {
-      const fromPerson = persons.find(p => p.id === d.from);
-      const toPerson = persons.find(p => p.id === d.to);
+      const fromPerson = finalVisiblePersons.find(p => p.id === d.from);
+      const toPerson = finalVisiblePersons.find(p => p.id === d.to);
 
       if (!fromPerson || !toPerson) return '';
 
@@ -80,8 +116,8 @@ const GraphCanvas = ({
     };
 
     // Check for bidirectional relationships and add offset
-    const edgesWithOffset = relations.map(relation => {
-      const reverseRelation = relations.find(r =>
+    const edgesWithOffset = visibleRelations.map(relation => {
+      const reverseRelation = visibleRelations.find(r =>
         r.from === relation.to && r.to === relation.from
       );
 
@@ -133,8 +169,8 @@ const GraphCanvas = ({
     // Add edge labels
     edges.append('text')
       .attr('x', d => {
-        const fromPerson = persons.find(p => p.id === d.from);
-        const toPerson = persons.find(p => p.id === d.to);
+        const fromPerson = finalVisiblePersons.find(p => p.id === d.from);
+        const toPerson = finalVisiblePersons.find(p => p.id === d.to);
         if (!fromPerson || !toPerson) return 0;
 
         const dx = toPerson.x - fromPerson.x;
@@ -145,8 +181,8 @@ const GraphCanvas = ({
         return (fromPerson.x + toPerson.x) / 2 + perpX;
       })
       .attr('y', d => {
-        const fromPerson = persons.find(p => p.id === d.from);
-        const toPerson = persons.find(p => p.id === d.to);
+        const fromPerson = finalVisiblePersons.find(p => p.id === d.from);
+        const toPerson = finalVisiblePersons.find(p => p.id === d.to);
         if (!fromPerson || !toPerson) return 0;
 
         const dx = toPerson.x - fromPerson.x;
@@ -180,29 +216,42 @@ const GraphCanvas = ({
 
     // Draw persons (nodes)
     const nodes = g.selectAll('.node')
-      .data(persons)
+      .data(finalVisiblePersons)
       .enter()
       .append('g')
       .attr('class', 'node')
       .attr('transform', d => `translate(${d.x},${d.y})`)
       .style('cursor', 'pointer');
 
-    // Node circle
+    // Node circle with visual merge styling
     nodes.append('circle')
-      .attr('r', 25)
-      .attr('fill', d => selectedNode?.id === d.id ? '#3b82f6' : '#f3f4f6')
-      .attr('stroke', d => selectedNode?.id === d.id ? '#1d4ed8' : '#9ca3af')
-      .attr('stroke-width', 2);
+      .attr('r', d => {
+        // Check if this node is a merged node (larger size)
+        return mergedNodes.has(d.id) ? 35 : 25;
+      })
+      .attr('fill', d => {
+        if (mergedNodes.has(d.id)) {
+          return '#f59e0b'; // Orange for merged nodes
+        }
+        return selectedNode?.id === d.id ? '#3b82f6' : '#f3f4f6';
+      })
+      .attr('stroke', d => {
+        if (mergedNodes.has(d.id)) {
+          return '#d97706'; // Darker orange stroke for merged nodes
+        }
+        return selectedNode?.id === d.id ? '#1d4ed8' : '#9ca3af';
+      })
+      .attr('stroke-width', d => mergedNodes.has(d.id) ? 3 : 2);
 
-    // Node image (if available)
+    // Node image (if available) with adjusted size for merged nodes
     nodes.filter(d => d.photo)
       .append('image')
       .attr('href', d => d.photo)
-      .attr('x', -20)
-      .attr('y', -20)
-      .attr('width', 40)
-      .attr('height', 40)
-      .attr('clip-path', 'circle(20px at 50% 50%)');
+      .attr('x', d => mergedNodes.has(d.id) ? -28 : -20)
+      .attr('y', d => mergedNodes.has(d.id) ? -28 : -20)
+      .attr('width', d => mergedNodes.has(d.id) ? 56 : 40)
+      .attr('height', d => mergedNodes.has(d.id) ? 56 : 40)
+      .attr('clip-path', d => mergedNodes.has(d.id) ? 'circle(28px at 50% 50%)' : 'circle(20px at 50% 50%)');
 
     // Node text
     nodes.append('text')
@@ -242,8 +291,8 @@ const GraphCanvas = ({
 
         svg.selectAll('.edge text')
           .attr('x', edge => {
-            const fromPerson = persons.find(p => p.id === edge.from);
-            const toPerson = persons.find(p => p.id === edge.to);
+            const fromPerson = finalVisiblePersons.find(p => p.id === edge.from);
+            const toPerson = finalVisiblePersons.find(p => p.id === edge.to);
             if (!fromPerson || !toPerson) return 0;
 
             const dx = toPerson.x - fromPerson.x;
@@ -254,8 +303,8 @@ const GraphCanvas = ({
             return (fromPerson.x + toPerson.x) / 2 + perpX;
           })
           .attr('y', edge => {
-            const fromPerson = persons.find(p => p.id === edge.from);
-            const toPerson = persons.find(p => p.id === edge.to);
+            const fromPerson = finalVisiblePersons.find(p => p.id === edge.from);
+            const toPerson = finalVisiblePersons.find(p => p.id === edge.to);
             if (!fromPerson || !toPerson) return 0;
 
             const dx = toPerson.x - fromPerson.x;
@@ -319,7 +368,7 @@ const GraphCanvas = ({
     });
 
 
-  }, [persons, relations, selectedNode, selectedEdge, isConnecting, connectFrom]);
+  }, [persons, relations, selectedNode, selectedEdge, isConnecting, connectFrom, mergedNodes]);
 
   // Add global click handler to close context menu
   useEffect(() => {
@@ -352,6 +401,12 @@ const GraphCanvas = ({
         case 'connect':
           setIsConnecting(true);
           setConnectFrom(target.data);
+          break;
+        case 'visualMerge':
+          onVisualMergeNode(target.data.id);
+          break;
+        case 'visualUnmerge':
+          onVisualUnmergeNode(target.data.id);
           break;
         default:
           break;
@@ -399,6 +454,47 @@ const GraphCanvas = ({
         </div>
       )}
 
+      {/* Merged nodes info */}
+      {mergedNodes.size > 0 && (
+        <div className="absolute top-4 right-4 bg-orange-100 border border-orange-300 rounded p-3 max-w-xs">
+          <h4 className="text-sm font-medium text-orange-800 mb-2">已合併的節點</h4>
+          {Array.from(mergedNodes).map(([mergedNodeId, mergeInfo]) => {
+            const mergedNode = persons.find(p => p.id === mergedNodeId);
+            const displayedNode = persons.find(p => p.id === mergeInfo.displayedNode);
+            const hiddenNodes = mergeInfo.hiddenNodes.map(id => persons.find(p => p.id === id)).filter(Boolean);
+
+            return (
+              <div key={mergedNodeId} className="mb-3 last:mb-0">
+                <div className="text-xs text-orange-700 mb-1">
+                  合併群組：{mergedNode?.name}
+                </div>
+                <div className="text-xs text-orange-600 mb-1">
+                  目前顯示：{displayedNode?.name}
+                </div>
+
+                <select
+                  value={mergeInfo.displayedNode}
+                  onChange={(e) => onSwitchDisplayedNode(mergedNodeId, e.target.value)}
+                  className="w-full text-xs border border-orange-300 rounded px-1 py-1 bg-white"
+                >
+                  <option value={mergedNodeId}>{mergedNode?.name}</option>
+                  {hiddenNodes.map(node => (
+                    <option key={node.id} value={node.id}>{node.name}</option>
+                  ))}
+                </select>
+
+                <button
+                  onClick={() => onVisualUnmergeNode(mergedNodeId)}
+                  className="text-xs text-orange-600 underline mt-1"
+                >
+                  解除合併
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {contextMenu.show && (
         <div
           className="context-menu fixed bg-white border shadow-lg rounded py-1 z-50"
@@ -418,6 +514,21 @@ const GraphCanvas = ({
               >
                 建立關係
               </button>
+              {mergedNodes.has(contextMenu.target?.data.id) ? (
+                <button
+                  onClick={() => handleContextMenuAction('visualUnmerge')}
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-green-600"
+                >
+                  解除合併
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleContextMenuAction('visualMerge')}
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-orange-600"
+                >
+                  視覺合併
+                </button>
+              )}
               <button
                 onClick={() => handleContextMenuAction('delete')}
                 className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-red-600"
