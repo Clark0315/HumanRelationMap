@@ -7,7 +7,8 @@ const Sidebar = ({
   relations,
   onUpdatePerson,
   onUpdateRelation,
-  onAddRelation
+  onAddRelation,
+  onMergePerson
 }) => {
   const [editData, setEditData] = useState({});
   const [isEditing, setIsEditing] = useState(false);
@@ -69,6 +70,25 @@ const Sidebar = ({
       // Clear form
       document.getElementById('relationTo').value = '';
       document.getElementById('relationLabel').value = '';
+    }
+  };
+
+  const handleMergePerson = () => {
+    const targetPersonId = document.getElementById('mergeTarget').value;
+    const keepFirst = document.getElementById('mergeKeepFirst').checked;
+
+    if (targetPersonId && targetPersonId !== selectedNode.id) {
+      const targetPerson = persons.find(p => p.id === targetPersonId);
+      const confirmMessage = keepFirst
+        ? `確定要合併節點嗎？\n將保留「${selectedNode.name}」的資料，刪除「${targetPerson.name}」`
+        : `確定要合併節點嗎？\n將保留「${targetPerson.name}」的資料，刪除「${selectedNode.name}」`;
+
+      if (window.confirm(confirmMessage)) {
+        onMergePerson(selectedNode.id, targetPersonId, keepFirst);
+        // Clear form
+        document.getElementById('mergeTarget').value = '';
+        document.getElementById('mergeKeepFirst').checked = true;
+      }
     }
   };
 
@@ -247,6 +267,49 @@ const Sidebar = ({
                 新增關係
               </button>
             </div>
+
+            {/* Merge person */}
+            {persons.length > 1 && (
+              <div className="mt-4 p-3 bg-orange-50 rounded">
+                <h5 className="text-sm font-medium mb-2">合併節點</h5>
+                <select
+                  id="mergeTarget"
+                  className="w-full border border-gray-300 rounded px-2 py-1 text-sm mb-2"
+                >
+                  <option value="">選擇要合併的對象...</option>
+                  {persons
+                    .filter(p => p.id !== selectedNode.id)
+                    .map(person => (
+                      <option key={person.id} value={person.id}>
+                        {person.name}
+                      </option>
+                    ))}
+                </select>
+
+                <div className="mb-2">
+                  <label className="flex items-center text-sm">
+                    <input
+                      id="mergeKeepFirst"
+                      type="checkbox"
+                      defaultChecked={true}
+                      className="mr-2"
+                    />
+                    保留當前節點「{selectedNode.name}」的資料
+                  </label>
+                </div>
+
+                <button
+                  onClick={handleMergePerson}
+                  className="w-full px-3 py-1 bg-orange-500 text-white rounded text-sm hover:bg-orange-600"
+                >
+                  合併節點
+                </button>
+
+                <p className="text-xs text-gray-600 mt-1">
+                  💡 合併後可使用 Ctrl+Z 復原操作
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

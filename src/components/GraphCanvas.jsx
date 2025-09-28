@@ -54,6 +54,7 @@ const GraphCanvas = ({
         onSelectEdge(null);
         setIsConnecting(false);
         setConnectFrom(null);
+        setContextMenu({ show: false, x: 0, y: 0, target: null });
       });
 
     // Helper function to calculate curved path for bidirectional relationships
@@ -213,13 +214,24 @@ const GraphCanvas = ({
 
     // Node drag behavior
     let isDragging = false;
+    let dragStartPosition = null;
     const drag = d3.drag()
       .on('start', function(event, d) {
         isDragging = false;
+        dragStartPosition = { x: event.x, y: event.y };
         d3.select(this).raise().attr('stroke', '#1d4ed8');
       })
       .on('drag', function(event, d) {
-        isDragging = true;
+        // Only consider it dragging if moved more than 5 pixels
+        const distance = Math.sqrt(
+          Math.pow(event.x - dragStartPosition.x, 2) +
+          Math.pow(event.y - dragStartPosition.y, 2)
+        );
+
+        if (distance > 5) {
+          isDragging = true;
+        }
+
         d.x = event.x;
         d.y = event.y;
         d3.select(this).attr('transform', `translate(${d.x},${d.y})`);
@@ -258,7 +270,11 @@ const GraphCanvas = ({
         if (isDragging) {
           onUpdatePerson(d.id, { x: d.x, y: d.y });
         }
-        isDragging = false;
+        // Reset dragging state after a short delay to allow click to process
+        setTimeout(() => {
+          isDragging = false;
+          dragStartPosition = null;
+        }, 100);
       });
 
     nodes.call(drag);
@@ -304,6 +320,21 @@ const GraphCanvas = ({
 
 
   }, [persons, relations, selectedNode, selectedEdge, isConnecting, connectFrom]);
+
+  // Add global click handler to close context menu
+  useEffect(() => {
+    const handleGlobalClick = (event) => {
+      // Check if the click is outside the context menu
+      if (contextMenu.show && !event.target.closest('.context-menu')) {
+        setContextMenu({ show: false, x: 0, y: 0, target: null });
+      }
+    };
+
+    if (contextMenu.show) {
+      document.addEventListener('click', handleGlobalClick);
+      return () => document.removeEventListener('click', handleGlobalClick);
+    }
+  }, [contextMenu.show]);
 
   const handleContextMenuAction = (action) => {
     const { target } = contextMenu;
@@ -370,7 +401,7 @@ const GraphCanvas = ({
 
       {contextMenu.show && (
         <div
-          className="fixed bg-white border shadow-lg rounded py-1 z-50"
+          className="context-menu fixed bg-white border shadow-lg rounded py-1 z-50"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           {contextMenu.target?.type === 'node' && (
