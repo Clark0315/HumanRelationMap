@@ -28,6 +28,10 @@ const GraphCanvas = ({
     // Set up zoom behavior
     const zoom = d3.zoom()
       .scaleExtent([0.1, 4])
+      .filter((event) => {
+        // Allow zoom on wheel events, or pan with middle mouse button
+        return event.type === 'wheel' || event.button === 1 || event.touches?.length > 1;
+      })
       .on('zoom', (event) => {
         g.attr('transform', event.transform);
       });
@@ -36,32 +40,78 @@ const GraphCanvas = ({
 
     const g = svg.append('g');
 
+    // Add a background rectangle to capture clicks on empty space
+    g.append('rect')
+      .attr('x', -10000)
+      .attr('y', -10000)
+      .attr('width', 20000)
+      .attr('height', 20000)
+      .attr('fill', 'transparent')
+      .style('cursor', 'default')
+      .on('click', (event) => {
+        event.stopPropagation();
+        onSelectNode(null);
+        onSelectEdge(null);
+        setIsConnecting(false);
+        setConnectFrom(null);
+      });
+
+    // Helper function to calculate curved path for bidirectional relationships
+    const calculateCurvedPath = (d, offset = 0) => {
+      const fromPerson = persons.find(p => p.id === d.from);
+      const toPerson = persons.find(p => p.id === d.to);
+
+      if (!fromPerson || !toPerson) return '';
+
+      const dx = toPerson.x - fromPerson.x;
+      const dy = toPerson.y - fromPerson.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // Calculate perpendicular offset for curved line
+      const perpX = -dy / distance * offset;
+      const perpY = dx / distance * offset;
+
+      // Control point for the curve
+      const midX = (fromPerson.x + toPerson.x) / 2 + perpX;
+      const midY = (fromPerson.y + toPerson.y) / 2 + perpY;
+
+      return `M ${fromPerson.x} ${fromPerson.y} Q ${midX} ${midY} ${toPerson.x} ${toPerson.y}`;
+    };
+
+    // Check for bidirectional relationships and add offset
+    const edgesWithOffset = relations.map(relation => {
+      const reverseRelation = relations.find(r =>
+        r.from === relation.to && r.to === relation.from
+      );
+
+      if (reverseRelation) {
+        // For bidirectional relationships, we need to make them curve to different sides
+        // Create a consistent identifier for the relationship pair
+        const pairId = [relation.from, relation.to].sort().join('-');
+
+        // Use hash of relation.id to determine which side each curve goes
+        // This ensures consistent but different offsets for the two directions
+        const relationHash = relation.id.charCodeAt(0) + relation.id.charCodeAt(relation.id.length - 1);
+        const offset = (relationHash % 2 === 0) ? 20 : -20;
+
+        return { ...relation, offset };
+      } else {
+        return { ...relation, offset: 0 };
+      }
+    });
+
     // Draw relations (edges)
     const edges = g.selectAll('.edge')
-      .data(relations)
+      .data(edgesWithOffset)
       .enter()
       .append('g')
       .attr('class', 'edge');
 
-    edges.append('line')
-      .attr('x1', d => {
-        const fromPerson = persons.find(p => p.id === d.from);
-        return fromPerson ? fromPerson.x : 0;
-      })
-      .attr('y1', d => {
-        const fromPerson = persons.find(p => p.id === d.from);
-        return fromPerson ? fromPerson.y : 0;
-      })
-      .attr('x2', d => {
-        const toPerson = persons.find(p => p.id === d.to);
-        return toPerson ? toPerson.x : 0;
-      })
-      .attr('y2', d => {
-        const toPerson = persons.find(p => p.id === d.to);
-        return toPerson ? toPerson.y : 0;
-      })
+    edges.append('path')
+      .attr('d', d => calculateCurvedPath(d, d.offset))
       .attr('stroke', d => selectedEdge?.id === d.id ? '#3b82f6' : '#6b7280')
       .attr('stroke-width', 2)
+      .attr('fill', 'none')
       .attr('marker-end', 'url(#arrowhead)')
       .style('cursor', 'pointer')
       .on('click', (event, d) => {
@@ -84,12 +134,26 @@ const GraphCanvas = ({
       .attr('x', d => {
         const fromPerson = persons.find(p => p.id === d.from);
         const toPerson = persons.find(p => p.id === d.to);
-        return fromPerson && toPerson ? (fromPerson.x + toPerson.x) / 2 : 0;
+        if (!fromPerson || !toPerson) return 0;
+
+        const dx = toPerson.x - fromPerson.x;
+        const dy = toPerson.y - fromPerson.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const perpX = -dy / distance * d.offset;
+
+        return (fromPerson.x + toPerson.x) / 2 + perpX;
       })
       .attr('y', d => {
         const fromPerson = persons.find(p => p.id === d.from);
         const toPerson = persons.find(p => p.id === d.to);
-        return fromPerson && toPerson ? (fromPerson.y + toPerson.y) / 2 - 5 : 0;
+        if (!fromPerson || !toPerson) return 0;
+
+        const dx = toPerson.x - fromPerson.x;
+        const dy = toPerson.y - fromPerson.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const perpY = dx / distance * d.offset;
+
+        return (fromPerson.y + toPerson.y) / 2 + perpY - 5;
       })
       .attr('text-anchor', 'middle')
       .attr('font-size', '12px')
@@ -148,48 +212,53 @@ const GraphCanvas = ({
       .text(d => d.name);
 
     // Node drag behavior
+    let isDragging = false;
     const drag = d3.drag()
       .on('start', function(event, d) {
+        isDragging = false;
         d3.select(this).raise().attr('stroke', '#1d4ed8');
       })
       .on('drag', function(event, d) {
+        isDragging = true;
         d.x = event.x;
         d.y = event.y;
         d3.select(this).attr('transform', `translate(${d.x},${d.y})`);
 
         // Update connected edges
-        svg.selectAll('.edge line')
-          .attr('x1', edge => {
-            const fromPerson = persons.find(p => p.id === edge.from);
-            return fromPerson ? fromPerson.x : 0;
-          })
-          .attr('y1', edge => {
-            const fromPerson = persons.find(p => p.id === edge.from);
-            return fromPerson ? fromPerson.y : 0;
-          })
-          .attr('x2', edge => {
-            const toPerson = persons.find(p => p.id === edge.to);
-            return toPerson ? toPerson.x : 0;
-          })
-          .attr('y2', edge => {
-            const toPerson = persons.find(p => p.id === edge.to);
-            return toPerson ? toPerson.y : 0;
-          });
+        svg.selectAll('.edge path')
+          .attr('d', edge => calculateCurvedPath(edge, edge.offset || 0));
 
         svg.selectAll('.edge text')
           .attr('x', edge => {
             const fromPerson = persons.find(p => p.id === edge.from);
             const toPerson = persons.find(p => p.id === edge.to);
-            return fromPerson && toPerson ? (fromPerson.x + toPerson.x) / 2 : 0;
+            if (!fromPerson || !toPerson) return 0;
+
+            const dx = toPerson.x - fromPerson.x;
+            const dy = toPerson.y - fromPerson.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const perpX = -dy / distance * (edge.offset || 0);
+
+            return (fromPerson.x + toPerson.x) / 2 + perpX;
           })
           .attr('y', edge => {
             const fromPerson = persons.find(p => p.id === edge.from);
             const toPerson = persons.find(p => p.id === edge.to);
-            return fromPerson && toPerson ? (fromPerson.y + toPerson.y) / 2 - 5 : 0;
+            if (!fromPerson || !toPerson) return 0;
+
+            const dx = toPerson.x - fromPerson.x;
+            const dy = toPerson.y - fromPerson.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const perpY = dx / distance * (edge.offset || 0);
+
+            return (fromPerson.y + toPerson.y) / 2 + perpY - 5;
           });
       })
       .on('end', function(event, d) {
-        onUpdatePerson(d.id, { x: d.x, y: d.y });
+        if (isDragging) {
+          onUpdatePerson(d.id, { x: d.x, y: d.y });
+        }
+        isDragging = false;
       });
 
     nodes.call(drag);
@@ -198,20 +267,26 @@ const GraphCanvas = ({
     nodes.on('click', (event, d) => {
       event.stopPropagation();
 
+      // Don't process click if we were just dragging
+      if (isDragging) {
+        return;
+      }
+
       if (isConnecting) {
         if (connectFrom && connectFrom.id !== d.id) {
           const label = prompt('請輸入關係名稱（最多8字）：');
-          if (label && label.length <= 8) {
+          if (label && label.trim() && label.length <= 8) {
             onAddRelation({
               from: connectFrom.id,
               to: d.id,
-              label,
+              label: label.trim(),
               note: ''
             });
           }
-          setIsConnecting(false);
-          setConnectFrom(null);
         }
+        // Always exit connecting mode after clicking a node
+        setIsConnecting(false);
+        setConnectFrom(null);
       } else {
         onSelectNode(d);
         onSelectEdge(null);
@@ -227,13 +302,6 @@ const GraphCanvas = ({
       });
     });
 
-    // Clear selection when clicking on empty space
-    svg.on('click', () => {
-      onSelectNode(null);
-      onSelectEdge(null);
-      setIsConnecting(false);
-      setConnectFrom(null);
-    });
 
   }, [persons, relations, selectedNode, selectedEdge, isConnecting, connectFrom]);
 
